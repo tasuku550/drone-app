@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>個人用ドローン飛行日誌 (クラウド連携)</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 10px; background-color: #f5f7fa; color: #333; }
+        h1 { text-align: center; color: #2c3e50; font-size: 24px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        input, select, textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        .time-group { display: flex; gap: 10px; }
+        .time-group div { flex: 1; }
+        .location-input-wrap { display: flex; gap: 8px; }
+        .gps-btn { width: auto; padding: 0 15px; background-color: #e67e22; font-size: 14px; white-space: nowrap; }
+        .gps-btn:hover { background-color: #d35400; }
+        .gps-status { font-size: 11px; color: #7f8c8d; margin-top: 4px; display: block; }
+        button { width: 100%; padding: 12px; background-color: #3498db; color: white; border: none; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background-color: #2980b9; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #ecf0f1; }
+    </style>
+</head>
+<body>
+
+    <h1>🛸 ドローン飛行日誌 (クラウド連携)</h1>
+
+    <div class="card">
+        <form id="logForm">
+            <div class="form-group">
+                <label for="regNum">機体の登録記号</label>
+                <input type="text" id="regNum" placeholder="例: JU1234567890" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="pilot">操縦者氏名</label>
+                <input type="text" id="pilot" placeholder="例: 山田 太郎" required>
+            </div>
+
+            <div class="form-group">
+                <label for="date">飛行年月日</label>
+                <input type="date" id="date" required>
+            </div>
+
+            <div class="time-group">
+                <div class="form-group">
+                    <label for="takeoff">離陸時刻</label>
+                    <input type="time" id="takeoff" required>
+                </div>
+                <div class="form-group">
+                    <label for="landing">着陸時刻</label>
+                    <input type="time" id="landing" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="location">離着陸場所</label>
+                <div class="location-input-wrap">
+                    <input type="text" id="location" placeholder="例: GPS取得ボタンを押してください" required>
+                    <button type="button" id="getGpsBtn" class="gps-btn">📍 GPS取得</button>
+                </div>
+                <span id="gpsStatus" class="gps-status"></span>
+            </div>
+
+            <div class="form-group">
+                <label for="purpose">飛行の目的・方式</label>
+                <textarea id="purpose" rows="2" placeholder="例: 空撮" required></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn">日誌を記録＆クラウド保存</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3>送信済みの最新フライト</h3>
+        <p id="cloudStatus" style="font-size:13px; color:#27ae60; font-weight:bold;"></p>
+    </div>
+
+    <script>
+        // ⚠️【最重要】Google Apps Scriptのデプロイ後に発行されるURLをここに貼り付けてください
+        const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxCQjJqVBTWQEkeQ0oo2sW23-CVPoyOCVhbZ4zhLF18DWIkfahuY9aXVU7PIUM-3ASNjw/exec";
+
+        document.getElementById('date').value = new Date().toISOString().substring(0, 10);
+
+        function calculateFlightTime(takeoff, landing) {
+            const [tHour, tMin] = takeoff.split(':').map(Number);
+            const [lHour, lMin] = landing.split(':').map(Number);
+            let diffMinutes = (lHour * 60 + lMin) - (tHour * 60 + tMin);
+            if (diffMinutes < 0) diffMinutes += 24 * 60;
+            return diffMinutes;
+        }
+
+        // GPS取得
+        document.getElementById('getGpsBtn').addEventListener('click', function() {
+            const statusText = document.getElementById('gpsStatus');
+            const locationInput = document.getElementById('location');
+            if (!navigator.geolocation) { alert("GPS非対応端末です"); return; }
+            statusText.textContent = "位置情報を取得中...";
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude.toFixed(6);
+                    const lng = position.coords.longitude.toFixed(6);
+                    locationInput.value = `緯度:${lat}, 経度:${lng}`;
+                    statusText.textContent = "座標を入力しました。";
+                },
+                function() { statusText.textContent = "GPS取得失敗。設定を確認してください。"; },
+                { enableHighAccuracy: true, timeout: 10000 }
+            );
+        });
+
+        // フォーム送信（クラウドへリアルタイム自動保存）
+        document.getElementById('logForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const cloudStatus = document.getElementById('cloudStatus');
+            
+            const takeoff = document.getElementById('takeoff').value;
+            const landing = document.getElementById('landing').value;
+            const duration = calculateFlightTime(takeoff, landing);
+
+            const formData = {
+                date: document.getElementById('date').value,
+                regNum: document.getElementById('regNum').value,
+                pilot: document.getElementById('pilot').value,
+                takeoff: takeoff,
+                landing: landing,
+                duration: duration,
+                location: document.getElementById('location').value,
+                purpose: document.getElementById('purpose').value
+            };
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = "クラウドに送信中...";
+            cloudStatus.textContent = "⚡ Googleドライブへ保存しています...";
+
+            if (GAS_WEBAPP_URL === "ここにGASのウェブアプリURLを貼り付ける") {
+                alert("初期設定が必要です。説明文に従ってGASのURLを貼り付けてください。");
+                submitBtn.disabled = false;
+                submitBtn.textContent = "日誌を記録＆クラウド保存";
+                return;
+            }
+
+            try {
+                await fetch(GAS_WEBAPP_URL, {
+                    method: "POST",
+                    mode: "no-cors",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(formData)
+                });
+
+                cloudStatus.innerHTML = `✅ 保存成功！<br>日時: ${formData.date} ${takeoff}～${landing} (${duration}分)<br>場所: ${formData.location}`;
+                
+                document.getElementById('takeoff').value = '';
+                document.getElementById('landing').value = '';
+                document.getElementById('location').value = '';
+                document.getElementById('gpsStatus').textContent = '';
+                alert("Googleスプレッドシートへの自動保存が完了しました！");
+
+            } catch (error) {
+                console.error(error);
+                alert("通信エラーが発生しました。保存できていない可能性があります。");
+                cloudStatus.textContent = "❌ 保存失敗。電波状況を確認してください。";
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = "日誌を記録＆クラウド保存";
+            }
+        });
+    </script>
+</body>
+</html>
