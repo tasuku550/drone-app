@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ドローン飛行日誌</title>
+    <title>個人用ドローン飛行日誌 </title>
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -29,22 +29,18 @@
 </head>
 <body>
 
-    <h1>🛸 ドローン飛行日誌</h1>
+    <h1>🛸 ドローン飛行日誌 </h1>
 
     <div class="card">
         <form id="logForm">
             <div class="form-group">
                 <label for="regNum">機体の登録記号</label>
-                <!-- list属性を追加 -->
-                <input type="text" id="regNum" list="regNumList" placeholder="例: JU1234567890" required>
-                <datalist id="regNumList"></datalist>
+                <input type="text" id="regNum" placeholder="例: JU1234567890" required>
             </div>
             
             <div class="form-group">
                 <label for="pilot">操縦者氏名</label>
-                <!-- list属性を追加 -->
-                <input type="text" id="pilot" list="pilotList" placeholder="例: 山田 太郎" required>
-                <datalist id="pilotList"></datalist>
+                <input type="text" id="pilot" placeholder="例: 山田 太郎" required>
             </div>
 
             <div class="form-group">
@@ -74,9 +70,7 @@
 
             <div class="form-group">
                 <label for="purpose">飛行の目的・方式</label>
-                <!-- datalistを利かせるため、textareaからinput(text)へ変更 -->
-                <input type="text" id="purpose" list="purposeList" placeholder="例: 空撮" required>
-                <datalist id="purposeList"></datalist>
+                <textarea id="purpose" rows="2" placeholder="例: 空撮" required></textarea>
             </div>
 
             <button type="submit" id="submitBtn">日誌を記録＆クラウド保存</button>
@@ -92,19 +86,7 @@
         // ⚠️【最重要】Google Apps Scriptのデプロイ後に発行されるURLをここに貼り付けてください
         const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxOPk8gElnbM2liCGFYn6LSmGF1v16Q0T0kcNq-J_NGRfWdqnbDDf32FJlQNuHkwZZsBA/exec";
 
-        // 履歴を保持・選択させたい要素のIDリスト
-        const targetHistoryFields = ['regNum', 'pilot', 'purpose'];
-
-        // ページ読み込み時の初期化処理
-        document.addEventListener('DOMContentLoaded', () => {
-            // 日付のデフォルトセット
-            document.getElementById('date').value = new Date().toISOString().substring(0, 10);
-            
-            // 保存されている履歴から選択肢リスト(datalist)を生成
-            targetHistoryFields.forEach(fieldId => {
-                updateDatalist(fieldId);
-            });
-        });
+        document.getElementById('date').value = new Date().toISOString().substring(0, 10);
 
         function calculateFlightTime(takeoff, landing) {
             const [tHour, tMin] = takeoff.split(':').map(Number);
@@ -132,7 +114,7 @@
             );
         });
 
-        // フォーム送信（クラウドへリアルタイム自動保存 ＋ ローカルに履歴保存）
+        // フォーム送信（クラウドへリアルタイム自動保存）
         document.getElementById('logForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -166,7 +148,6 @@
             }
 
             try {
-                // クラウドへのデータ送信
                 await fetch(GAS_WEBAPP_URL, {
                     method: "POST",
                     mode: "no-cors",
@@ -174,18 +155,8 @@
                     body: JSON.stringify(formData)
                 });
 
-                // 送信成功時にローカルに新規入力を履歴として保存・リスト更新
-                targetHistoryFields.forEach(fieldId => {
-                    const value = formData[fieldId].trim();
-                    if (value) {
-                        saveHistory(fieldId, value);
-                        updateDatalist(fieldId);
-                    }
-                });
-
                 cloudStatus.innerHTML = `✅ 保存成功！<br>日時: ${formData.date} ${takeoff}～${landing} (${duration}分)<br>場所: ${formData.location}`;
                 
-                // 次回入力のために一部項目をリセット（機体・操縦者・目的は残す）
                 document.getElementById('takeoff').value = '';
                 document.getElementById('landing').value = '';
                 document.getElementById('location').value = '';
@@ -201,26 +172,6 @@
                 submitBtn.textContent = "日誌を記録＆クラウド保存";
             }
         });
-
-        // localStorageへの履歴保存処理（最大10件、最新順）
-        function saveHistory(fieldId, newValue) {
-            const storageKey = `drone_history_${fieldId}`;
-            let history = JSON.parse(localStorage.getItem(storageKey)) || [];
-
-            // 重複を排除して先頭に挿入
-            history = history.filter(item => item !== newValue);
-            history.unshift(newValue);
-
-            // 履歴が溢れたら古いものを削除
-            if (history.length > 10) history.pop();
-
-            localStorage.setItem(storageKey, JSON.stringify(history));
-        }
-
-        // datalistのHTML要素を更新する処理
-        function updateDatalist(fieldId) {
-            const storageKey = `drone_history_${fieldId}`;
-            const history = JSON.parse(localStorage.getItem(storageKey)) || [];
-            const datalist = document.getElementById(`${fieldId}List`);
-
-            if (!datalist) return;
+    </script>
+</body>
+</html>
