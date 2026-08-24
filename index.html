@@ -22,14 +22,24 @@
         .gps-status { font-size: 11px; color: #7f8c8d; margin-top: 4px; display: block; }
         button { width: 100%; padding: 12px; background-color: #3498db; color: white; border: none; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
         button:hover { background-color: #2980b9; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #ecf0f1; }
+        
+        /* 🚨 追加・変更したスタイル */
+        .sync-btn { background-color: #2ecc71; margin-top: 10px; }
+        .sync-btn:hover { background-color: #27ae60; }
+        .sync-btn:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+        .badge { background-color: #e74c3c; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; margin-left: 5px; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <h1>🛸 ドローン飛行日誌 </h1>
+
+    <!-- 🚨 未送信データがある場合に通知・再送するエリア -->
+    <div class="card" id="offlineAlertCard" style="display: none; border: 2px solid #e74c3c; background-color: #fdf2f2;">
+        <h3 style="margin-top: 0; color: #c0392b;">📡 未送信の日誌があります <span id="offlineCount" class="badge">0</span></h3>
+        <p style="font-size: 13px; margin-bottom: 10px;">電波の届かない場所で記録された日誌が端末内に一時保存されています。通信環境の良い場所で下のボタンを押してまとめて保存してください。</p>
+        <button type="button" id="syncBtn" class="sync-btn">🔄 クラウドへ一括送信する</button>
+    </div>
 
     <div class="card">
         <form id="logForm">
@@ -88,6 +98,9 @@
 
         document.getElementById('date').value = new Date().toISOString().substring(0, 10);
 
+        // 起動時に未送信データがないかチェック
+        updateOfflineUI();
+
         function calculateFlightTime(takeoff, landing) {
             const [tHour, tMin] = takeoff.split(':').map(Number);
             const [lHour, lMin] = landing.split(':').map(Number);
@@ -96,27 +109,73 @@
             return diffMinutes;
         }
 
-        // GPS取得
+        // --- GPS取得ロジック（Android高精度対応版） ---
+        let gpsWatcher = null;
+
         document.getElementById('getGpsBtn').addEventListener('click', function() {
             const statusText = document.getElementById('gpsStatus');
             const locationInput = document.getElementById('location');
-            if (!navigator.geolocation) { alert("GPS非対応端末です"); return; }
-            statusText.textContent = "位置情報を取得中...";
-            navigator.geolocation.getCurrentPosition(
+            const gpsBtn = document.getElementById('getGpsBtn');
+            
+            if (!navigator.geolocation) { 
+                alert("GPS非対応端末です"); 
+                return; 
+            }
+
+            if (gpsWatcher) {
+                navigator.geolocation.clearWatch(gpsWatcher);
+                gpsWatcher = null;
+            }
+
+            statusText.textContent = "高精度GPSを起動中（数秒かかります）...";
+            gpsBtn.disabled = true;
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 15000,          
+                maximumAge: 0            
+            };
+
+            gpsWatcher = navigator.geolocation.watchPosition(
                 function(position) {
                     const lat = position.coords.latitude.toFixed(6);
                     const lng = position.coords.longitude.toFixed(6);
+                    const accuracy = position.coords.accuracy;
+
                     locationInput.value = `緯度:${lat}, 経度:${lng}`;
-                    statusText.textContent = "座標を入力しました。";
+                    
+                    if (accuracy <= 30) {
+                        statusText.textContent = `取得完了（誤差: 約${Math.round(accuracy)}m）`;
+                        navigator.geolocation.clearWatch(gpsWatcher);
+                        gpsWatcher = null;
+                        gpsBtn.disabled = false;
+                    } else {
+                        statusText.textContent = `位置を調整中...（現在の誤差: 約${Math.round(accuracy)}m）`;
+                    }
                 },
-                function() { statusText.textContent = "GPS取得失敗。設定を確認してください。"; },
-                { enableHighAccuracy: true, timeout: 10000 }
+                function(error) { 
+                    let errMsg = "GPS取得失敗。設定を確認してください。";
+                    if (error.code === error.TIMEOUT) {
+                        errMsg = "タイムアウトしました。電波の良い屋外でお試しください。";
+                    }
+                    statusText.textContent = errMsg; 
+                    if (gpsWatcher) navigator.geolocation.clearWatch(gpsWatcher);
+                    gpsWatcher = null;
+                    gpsBtn.disabled = false;
+                },
+                options
             );
         });
 
-        // フォーム送信（クラウドへリアルタイム自動保存）
+        // フォーム送信（クラウド送信。ダメならローカルに一時保存）
         document.getElementById('logForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            if (gpsWatcher) {
+                navigator.geolocation.clearWatch(gpsWatcher);
+                gpsWatcher = null;
+                document.getElementById('getGpsBtn').disabled = false;
+            }
             
             const submitBtn = document.getElementById('submitBtn');
             const cloudStatus = document.getElementById('cloudStatus');
@@ -137,41 +196,109 @@
             };
 
             submitBtn.disabled = true;
-            submitBtn.textContent = "クラウドに送信中...";
-            cloudStatus.textContent = "⚡ Googleドライブへ保存しています...";
+            submitBtn.textContent = "送信処理中...";
 
-            if (GAS_WEBAPP_URL === "ここにGASのウェブアプリURLを貼り付ける") {
-                alert("初期設定が必要です。説明文に従ってGASのURLを貼り付けてください。");
+            if (GAS_WEBAPP_URL === "ここにGASのウェブアプリURLを貼り付ける" || GAS_WEBAPP_URL === "ここにGASのウェブアプリURLを貼り付けてください") {
+                alert("初期設定が必要です。GASのURLを貼り付けてください。");
                 submitBtn.disabled = false;
                 submitBtn.textContent = "日誌を記録＆クラウド保存";
                 return;
             }
 
-            try {
-                await fetch(GAS_WEBAPP_URL, {
-                    method: "POST",
-                    mode: "no-cors",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(formData)
-                });
-
-                cloudStatus.innerHTML = `✅ 保存成功！<br>日時: ${formData.date} ${takeoff}～${landing} (${duration}分)<br>場所: ${formData.location}`;
-                
-                document.getElementById('takeoff').value = '';
-                document.getElementById('landing').value = '';
-                document.getElementById('location').value = '';
-                document.getElementById('gpsStatus').textContent = '';
-                alert("Googleスプレッドシートへの自動保存が完了しました！");
-
-            } catch (error) {
-                console.error(error);
-                alert("通信エラーが発生しました。保存できていない可能性があります。");
-                cloudStatus.textContent = "❌ 保存失敗。電波状況を確認してください。";
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = "日誌を記録＆クラウド保存";
+            // オンライン状態かつ、即時送信を試みる
+            let sendSuccess = false;
+            if (navigator.onLine) {
+                cloudStatus.textContent = "⚡ Googleドライブへ保存しています...";
+                sendSuccess = await sendToGas(formData);
             }
-        });
-    </script>
-</body>
-</html>
+
+            if (sendSuccess) {
+                cloudStatus.innerHTML = `✅ クラウド保存成功！<br>日時: ${formData.date} ${takeoff}～${landing} (${duration}分)<br>場所: ${formData.location}`;
+                alert("Googleスプレッドシートへの自動保存が完了しました！");
+            } else {
+                // 🚨 オフライン、または通信エラー時は端末に一時保存
+                saveToLocalStorage(formData);
+                cloudStatus.innerHTML = `⚠️ オフラインのため、端末に一時保存しました。<br>電波が戻ったら「一括送信」してください。`;
+                alert("電波がないため端末へ一時保存しました。通信環境が良い場所で後ほど送信してください。");
+            }
+
+            // 共通の入力欄クリア処理
+            document.getElementById('takeoff').value = '';
+
+document.getElementById('landing').value = '';
+document.getElementById('location').value = '';
+document.getElementById('gpsStatus').textContent = '';
+submitBtn.disabled = false;
+submitBtn.textContent = "日誌を記録＆クラウド保存";
+// 未送信件数表示の更新
+updateOfflineUI();
+});
+// 🚨 一括同期ボタンの処理
+document.getElementById('syncBtn').addEventListener('click', async function() {
+const syncBtn = document.getElementById('syncBtn');
+const logs = JSON.parse(localStorage.getItem('drone_flight_logs') || '[]');
+if (logs.length === 0) return;
+syncBtn.disabled = true;
+syncBtn.textContent = 🔄 同期中 (0/${logs.length})...;
+let successCount = 0;
+const remainingLogs = [];
+// 貯まっているデータを順番に送信
+for (let i = 0; i < logs.length; i++) {
+syncBtn.textContent = 🔄 同期中 (${i + 1}/${logs.length})...;
+const success = await sendToGas(logs[i]);
+if (success) {
+successCount++;
+} else {
+remainingLogs.push(logs[i]); // 失敗したものは残す
+}
+}
+// 残ったものだけストレージに再保存
+localStorage.setItem('drone_flight_logs', JSON.stringify(remainingLogs));
+updateOfflineUI();
+syncBtn.disabled = false;
+syncBtn.textContent = "🔄 クラウドへ一括送信する";
+if (successCount > 0) {
+alert(🎉 ${successCount}件の日誌をクラウドに同期しました！);
+}
+if (remainingLogs.length > 0) {
+alert(❌ ${remainingLogs.length}件の送信に失敗しました。電波の良い場所で再度お試しください。);
+}
+});
+// GASへ通信をおこなうコア関数
+async function sendToGas(data) {
+try {
+// 3秒でタイムアウト判定をする設定（電波が激弱な場所でのフリーズ防止）
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 4000);
+await fetch(GAS_WEBAPP_URL, {
+method: "POST",
+mode: "no-cors",
+headers: { "Content-Type": "application/json" },
+body: JSON.stringify(data),
+signal: controller.signal
+});
+clearTimeout(timeoutId);
+return true; // 送信成功
+} catch (error) {
+console.error("GAS送信エラー:", error);
+return false; // 送信失敗
+}
+}
+// 端末ストレージへ保存する関数
+function saveToLocalStorage(data) {
+const logs = JSON.parse(localStorage.getItem('drone_flight_logs') || '[]');
+logs.push(data);
+localStorage.setItem('drone_flight_logs', JSON.stringify(logs));
+}
+// 画面上の未送信アラートUIの更新
+function updateOfflineUI() {
+const card = document.getElementById('offlineAlertCard');
+const countBadge = document.getElementById('offlineCount');
+const logs = JSON.parse(localStorage.getItem('drone_flight_logs') || '[]');
+if (logs.length > 0) {
+card.style.display = 'block';
+countBadge.textContent = logs.length;
+} else {
+card.style.display = 'none';
+}
+}
